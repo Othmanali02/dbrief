@@ -1,0 +1,55 @@
+{
+  "id": "heron",
+  "title": "The Mercer Street Safe House",
+  "date": "2026-10-14",
+  "intro": "Wednesday, 06:00. Three of the network's sources were arrested in Prague overnight. The only ledger with their names was kept in the station's safe house, the back room of the Marlowe Gallery on Mercer Street, run by Julian Marlowe. Station surveillance shows the safe house was opened on Tuesday night, 14 October, between about 21:20 and 21:55. Three people hold the access code. One of them is Celeste Varga, codename HERON, an art dealer and a station asset for eleven years. She has come in for a debrief.",
+  "asset": {
+    "id": "celeste",
+    "name": "Celeste Varga",
+    "codename": "HERON",
+    "persona": "Fifty-one, co-owner of the Marlowe Gallery, twenty years in the New York art trade, eleven of them reporting to the station. Polished, dry, faintly contemptuous of handlers who were in school when she started. She chooses words like a dealer negotiating a price. She is frightened underneath and hides it behind precision.",
+    "truth": [
+      "Two years ago, buried in debt, she was recruited by a hostile service. She has been reporting to them since.",
+      "20:15 to 21:05: dinner at Lumière with a collector, Paul Okafor, who left at 20:50. She paid the bill on her card at 20:58.",
+      "21:03: a burner phone tied to her hostile case officer messaged her: 'Mercer. Now. Bring it.'",
+      "21:05: she left Lumière in a hurry and walked to Mercer Street.",
+      "21:22: she opened the safe house with her own access code. The hostile officer followed her in at 21:25.",
+      "21:22 to 21:52: she opened the cabinet and let him photograph the ledger with the sources' names, page by page.",
+      "21:52: she left, walked one block, and hailed a cab on Mercer Street at 21:57.",
+      "22:11: the cab dropped her at The Blue Note. She told the bartender twice to remember she had been there all night.",
+      "22:11 to 23:30: at The Blue Note. Then home."
+    ],
+    "cover_story": "You were at Lumière with Paul Okafor until about ten, then took a cab straight to The Blue Note and stayed until it closed. You never went near the safe house that night. You were last there on Monday afternoon, dropping your monthly report with Julian."
+  },
+  "places": [
+    {"id": "lumiere", "name": "Lumière", "aliases": ["lumiere", "the restaurant", "dinner", "the bistro", "hudson street"]},
+    {"id": "safehouse", "name": "Safe house", "aliases": ["the safe house", "the gallery", "marlowe gallery", "marlowe's", "mercer street", "the back room", "the office"]},
+    {"id": "bluenote", "name": "The Blue Note", "aliases": ["blue note", "the bar", "the jazz club", "the club"]},
+    {"id": "home", "name": "Home", "aliases": ["home", "my place", "my apartment", "the flat"]},
+    {"id": "transit", "name": "In transit", "aliases": ["cab", "taxi", "walking", "on the way", "subway", "the street"]}
+  ],
+  "intel": [
+    {"code": "E1", "title": "FININT: Lumière receipt", "kind": "presence", "place": "lumiere", "start": "20:55", "end": "20:59",
+     "source": "Lumière's card terminal", "trust": 0.95, "known_at_start": true,
+     "detail": "Celeste Varga's Amex, table 12, paid at 20:58. Two covers."},
+    {"code": "E2", "title": "Safe-house door intercept", "kind": "presence", "place": "safehouse", "start": "21:22", "end": "21:52",
+     "source": "The safe-house door camera", "trust": 0.99,
+     "detail": "Covert camera on the safe-house door: HERON's access code, IN 21:22:14, OUT 21:52:40. An unidentified man entered at 21:25 and left at 21:50. No other code used between 21:00 and 06:00."},
+    {"code": "E3", "title": "SIGINT: handset location", "kind": "presence", "place": "safehouse", "start": "21:20", "end": "21:54",
+     "source": "SIGINT on her handset", "trust": 0.85,
+     "detail": "Her phone sat on the Mercer Street cell sector, the safe house's block, from 21:20 to 21:54."},
+    {"code": "E4", "title": "Taxi trip record", "kind": "presence", "place": "transit", "start": "21:57", "end": "22:11",
+     "source": "The taxi trip record", "trust": 0.95,
+     "detail": "Medallion 7K42: pickup 21:57 at Mercer & Prince, one block from the safe house. Drop-off 22:11 outside The Blue Note. Paid by her Amex."},
+    {"code": "E5", "title": "HUMINT: Lumière waiter", "kind": "absence", "place": "lumiere", "start": "21:10", "end": "22:30",
+     "source": "The Lumière waiter", "trust": 0.8,
+     "detail": "Marco, waiter at Lumière: 'Her guest left first. She got a text, paid, and was out the door before ten past nine. Table 12 was empty after that.'"},
+    {"code": "E6", "title": "HUMINT: Blue Note bartender", "kind": "absence", "place": "bluenote", "start": "20:30", "end": "22:08",
+     "source": "The Blue Note bartender", "trust": 0.8,
+     "detail": "Dana, bartender at The Blue Note: 'She came in a little after ten past ten. Told me twice to remember she'd been here all night. Weird thing to say.'"},
+    {"code": "E7", "title": "SIGINT: burner message", "kind": "context",
+     "source": "SIGINT on a burner tied to a hostile officer", "trust": 1.0,
+     "detail": "21:03, burner to HERON: 'Mercer. Now. Bring it.' Read 21:04."}
+  ],
+  "opening_question": "Celeste. Walk me through your Tuesday evening, from about eight o'clock."
+}

@@ -1,0 +1,28 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "dbrief"
+version = "0.1.0"
+description = "A contradiction engine for agent memory, shown as a debrief. The LLM lies; SurrealDB remembers."
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+dependencies = [
+    "surrealdb>=2.0",
+    "anthropic>=0.40",
+    "rich>=13",
+]
+
+[project.optional-dependencies]
+vectors = ["fastembed>=0.4"]
+
+[project.scripts]
+dbrief = "dbrief.game:main"
+
+[tool.setuptools]
+packages = ["dbrief"]
+
+[tool.setuptools.package-data]
+dbrief = ["schema.surql", "dossiers/*.json"]

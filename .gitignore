@@ -1,0 +1,10 @@
+.dbrief-db/
+.dbrief-bench/
+.dbrief-server.db/
+__pycache__/
+*.egg-info/
+bench.json
+history.txt
+*.svg
+*.html
+.venv/
