@@ -278,10 +278,30 @@ def bench(runs: int, db_root: str) -> None:
     ui.console.print(Text("  raw numbers saved to bench.json", style="grey50"))
 
 
+# ================================================================== load =====
+def load_memory(n: int, local_only: bool = False) -> None:
+    """Authoritative memory: one `policy` entity per dataset row, one attribute per checkable field."""
+    from .memory import AgentMemory, LocalMemory, dataset_path, demo_rows
+    rows = demo_rows(n)
+    ui.console.print(f"  dataset: {dataset_path() or 'bundled demo policy only'} · {len(rows)} policies")
+    if not local_only:
+        hosted = AgentMemory.from_env()
+        if hosted:
+            hosted.timeout = 900
+            t0 = time.perf_counter()
+            hosted.load(rows, log=ui.console.print)
+            ui.console.print(f"  SurrealDB Agent Memory: {len(rows)} policies in {time.perf_counter() - t0:.1f} s")
+        else:
+            ui.console.print("[yellow]  SPECTRON_* not set: skipping hosted Agent Memory[/]")
+    local = LocalMemory()
+    local.db.query("DELETE mem_attr;")
+    local.load(rows, log=ui.console.print)
+
+
 # =================================================================== cli =====
 def main(argv: list[str] | None = None) -> None:
     p = argparse.ArgumentParser(prog="dbrief", description="Debrief an AI asset. The database flags every lie.")
-    p.add_argument("mode", nargs="?", default="play", choices=["play", "autopilot", "bench"])
+    p.add_argument("mode", nargs="?", default="play", choices=["play", "autopilot", "bench", "load"])
     p.add_argument("--offline", action="store_true", help="scripted asset, no API key needed (database is still real)")
     p.add_argument("--no-memory", action="store_true", help="ablation: the asset gets only the question")
     p.add_argument("--resume", action="store_true", help="reopen the saved debrief and keep going (fresh-session test)")
@@ -293,7 +313,12 @@ def main(argv: list[str] | None = None) -> None:
     p.add_argument("--pace", type=float, default=0.0, help="autopilot seconds between turns with --no-step")
     p.add_argument("--runs", type=int, default=3, help="bench runs per condition")
     p.add_argument("--record", default=None, help="save the session transcript: name.svg or name.html")
+    p.add_argument("--rows", type=int, default=300, help="load: how many dataset rows (the demo policy first)")
+    p.add_argument("--local", action="store_true", help="load: local SurrealDB memory only")
     a = p.parse_args(argv)
+    if a.mode == "load":
+        load_memory(a.rows, local_only=a.local)
+        return
     if a.record:
         ui.console.record = True
 

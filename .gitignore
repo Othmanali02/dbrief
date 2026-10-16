@@ -9,3 +9,4 @@ history.txt
 *.html
 .venv/
 .env
+.dbrief-memory/
