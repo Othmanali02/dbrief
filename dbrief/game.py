@@ -200,7 +200,7 @@ def load(domain_name: str | None, csv_path: str | None, key: str | None, name: s
 def main(argv: list[str] | None = None) -> None:
     p = argparse.ArgumentParser(prog="dbrief", description="Agent memory that knows the difference between what "
                                 "you said and what the records say, for any dataset.")
-    p.add_argument("mode", nargs="?", default="play", choices=["play", "autopilot", "load"])
+    p.add_argument("mode", nargs="?", default="play", choices=["play", "autopilot", "load", "rehearse"])
     p.add_argument("csv", nargs="?", default=None, help="load: a CSV to profile and load")
     p.add_argument("--domain", default=None, help="domains/<name>.toml (default: DBRIEF_DOMAIN, or the only domain)")
     p.add_argument("--key", default=None, help="load: the CSV's key column; play/autopilot: which record to talk about")
@@ -219,6 +219,14 @@ def main(argv: list[str] | None = None) -> None:
     a = p.parse_args(argv)
     if a.mode == "load":
         load(a.domain, a.csv, a.key, a.name, a.rows, a.batch, a.local)
+        return
+    if a.mode == "rehearse":
+        from .agents import has_claude
+        from .memory import AgentMemory
+        from .rehearse import main as rehearse
+        if not a.offline and not (has_claude() and AgentMemory.from_env()):
+            raise SystemExit("live rehearsal needs ANTHROPIC_API_KEY and SPECTRON_API_KEY (or use --offline)")
+        rehearse(live=not a.offline)
         return
     if a.record:
         ui.console.record = True

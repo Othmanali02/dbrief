@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import json
 import os
+import time
 from typing import Any
 
 from .memory import env
@@ -132,6 +133,7 @@ class Agent:
         self.memory_enabled = memory_enabled
 
     def run(self, said: str, history: list[dict]) -> dict:
+        self.llm_calls: list[tuple[str, float]] = []   # (Claude call, ms), for latency reports
         d = self.domain
         who = d.speaker.capitalize()
         context = "\n".join(f"{who}: {t['question']}\nYou: {t['answer']}" for t in history[-2:])
@@ -144,8 +146,11 @@ class Agent:
             system += "\n\nYour memory tools are switched off for this session. You cannot look anything up."
         for step in range(8):
             last = step == 7
+            t0 = time.perf_counter()
             resp = _create(self.client, model=AGENT_MODEL, max_tokens=2000, system=system, messages=messages,
                            tools=[t for t in tools if t["name"] == "respond"] if last else tools)
+            called = ",".join(b.name for b in resp.content if getattr(b, "type", "") == "tool_use") or "text"
+            self.llm_calls.append((f"claude.agent step {step + 1} -> {called}", (time.perf_counter() - t0) * 1000))
             out = _tool_input(resp, "respond")
             if out:
                 return {"answer": out.get("answer", ""), "cited": list(out.get("cited_ids") or [])}

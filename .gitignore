@@ -11,3 +11,4 @@ history.txt
 .env
 .dbrief-memory/
 .dbrief-state.json
+.dbrief-rehearse/

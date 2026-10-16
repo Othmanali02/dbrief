@@ -24,9 +24,10 @@ ROOT = Path(__file__).resolve().parent.parent
 
 
 def env(name: str, default: str | None = None) -> str | None:
-    """Environment first, then the git-ignored .env file. Values are never printed."""
-    if os.environ.get(name):
-        return os.environ[name]
+    """Environment first, then the git-ignored .env file. Values are never printed.
+    A variable set to empty in the environment (NAME=) switches it off, .env or not."""
+    if name in os.environ:
+        return os.environ[name] or default
     f = ROOT / ".env"
     if f.exists():
         for line in f.read_text().splitlines():

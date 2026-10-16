@@ -30,6 +30,7 @@ class Tools:
         self.inspected: dict[str, dict] = {}
         self.checked: list[dict] | None = None
         self.memory_ms = 0.0
+        self.calls: list[tuple[str, float]] = []   # (memory call, ms), for latency reports
 
     def run(self, name: str, args: dict) -> str:
         fn = getattr(self, f"t_{name}", None)
@@ -44,6 +45,7 @@ class Tools:
         scopes = [self.s.scope] if scope == "conversation" else [self.s.domain.scope]
         r = self.s.memory.recall(query, scopes=scopes, k=8)
         self.memory_ms += r["ms"]
+        self.calls.append((f"memory.recall[{scope}]", r["ms"]))
         self.recalls.append({**r, "query": query, "scope": scope})
         if r.get("trace_id"):
             self.trace_ids.append(r["trace_id"])
@@ -60,6 +62,7 @@ class Tools:
             ref = self.s.domain.ref(ref)
         r = self.s.memory.inspect(ref)
         self.memory_ms += r["ms"]
+        self.calls.append(("memory.inspect", r["ms"]))
         if not r["found"]:
             return f"{ref}: not found in memory"
         self.inspected[ref] = r
@@ -86,6 +89,7 @@ class Tools:
     def t_remember(self, text: str) -> str:
         r = self.s.memory.remember(text, [self.s.scope])
         self.memory_ms += r["ms"]
+        self.calls.append(("memory.remember[note]", r["ms"]))
         return "noted"
 
 
@@ -132,7 +136,24 @@ class Session:
         n_filed, self._pending = len(self._pending), []
         return self.ledger.claims_for_turn(int(self._turn.id)) if n_filed else []
 
+    def close(self) -> None:
+        """Release the embedded stores, so another process (e.g. --resume) can open them."""
+        self._pool.shutdown(wait=True)
+        self.ledger.db.close()
+        local = getattr(self.memory, "local", None) if not hasattr(self.memory, "db") else self.memory
+        if local is not None:
+            local.db.close()
+
+    def _timed_extract(self, said: str, last_answer: str) -> list[dict]:
+        t0 = time.perf_counter()
+        try:
+            return self.extractor.extract(said, last_answer)
+        finally:
+            self._extract_ms = (time.perf_counter() - t0) * 1000
+
     def ask(self, said: str) -> dict:
+        t_start = time.perf_counter()
+        self._extract_ms = 0.0
         self.tools.reset()
         self._db_ms = 0.0
         # Only this process's turns: after --resume, earlier turns are reachable only through memory.
@@ -147,12 +168,16 @@ class Session:
             if self.memory.backend.startswith("SurrealDB Agent Memory"):  # hosted: written alongside the turn
                 remembering = self._pool.submit(self.memory.remember, *note)
             else:  # the embedded store is used from one thread only
-                self.tools.memory_ms += self.memory.remember(*note)["ms"]
-        self._extracting = self._pool.submit(self.extractor.extract, said, last_answer)
+                ms = self.memory.remember(*note)["ms"]
+                self.tools.memory_ms += ms
+                self.tools.calls.append(("memory.remember[turn]", ms))
+        self._extracting = self._pool.submit(self._timed_extract, said, last_answer)
+        t_agent = time.perf_counter()
         out = self.agent.run(said, history)
+        agent_ms = (time.perf_counter() - t_agent) * 1000
         self.wait_for_claims()
         if remembering is not None:
-            remembering.result()
+            self.tools.calls.append(("memory.remember[turn] (parallel)", remembering.result()["ms"]))
         if self._pending:  # the agent never called check_claims: file against nothing recalled
             self.file_claims(self.tools.inspected and next(iter(self.tools.inspected)) or None)
         self.ledger.set_answer(turn, out["answer"])
@@ -166,4 +191,8 @@ class Session:
                 "recalls": self.tools.recalls, "inspected": list(self.tools.inspected),
                 "claims": claims, "flags": flags, "superseded": sup, "review": self.ledger.review(),
                 "memory_ms": self.tools.memory_ms, "backend": self.memory.backend, "memory_enabled": self.memory_enabled,
-                "db": {"claims": len(claims), "edges": len(flags) + len(sup), "ms": self._db_ms}}
+                "db": {"claims": len(claims), "edges": len(flags) + len(sup), "ms": self._db_ms},
+                "timing": {"total_ms": (time.perf_counter() - t_start) * 1000, "agent_ms": agent_ms,
+                           "llm_calls": list(getattr(self.agent, "llm_calls", [])),
+                           "extract_ms": self._extract_ms, "memory_calls": list(self.tools.calls),
+                           "ledger_ms": self._db_ms}}

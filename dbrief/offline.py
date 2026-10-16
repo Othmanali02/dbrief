@@ -42,6 +42,8 @@ class ScriptedAgent:
     def run(self, said: str, history: list[dict]) -> dict:
         if not self.memory_enabled:
             return {"answer": "Thank you. I can't look anything up right now, so I can't verify that yet.", "cited": []}
+        if not any(b["said"] == said for b in self.d.offline):
+            return self._from_conversation(said)
         ref = self.d.ref(self.key)
         self.tools.run("recall", {"query": f"{self.d.entity} {self.key}", "scope": "records"})
         self.tools.run("inspect", {"ref": ref})
@@ -58,3 +60,12 @@ class ScriptedAgent:
             else:
                 lines.append(f"Our records have nothing on the {label}, so I can't verify that.")
         return {"answer": " ".join(lines) or "Thank you. Go on.", "cited": [ref]}
+
+    def _from_conversation(self, said: str) -> dict:
+        """Off-script: answer from what memory holds about this conversation (used by --resume)."""
+        self.tools.run("recall", {"query": said, "scope": "conversation"})
+        hits = (self.tools.recalls[-1]["hits"] if self.tools.recalls else [])[:3]
+        if not hits:
+            return {"answer": "I have nothing on record from earlier in our conversation.", "cited": []}
+        return {"answer": "From earlier in our conversation, memory has: " + " / ".join(h["text"] for h in hits),
+                "cited": [h["id"] for h in hits]}
