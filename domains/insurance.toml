@@ -1,0 +1,119 @@
+# DBrief domain: insurance claims.
+# Everything dataset-specific lives here; the engine (dbrief/) knows none of it.
+# Dataset: Kaggle "Auto Insurance Claims Data" (insurance_claims.csv), 1,000 rows. Not included in the repo.
+
+name = "insurance"
+display = "Insurance claims"
+csv = "../insurance_claims.csv"     # relative to the repo root; DBRIEF_DATA overrides
+key = "policy_number"
+entity = "policy"                    # Agent Memory entity type
+scope = "dbrief"                     # authoritative memory scope
+speaker = "claimant"
+agent = "adjuster"
+persona = "an insurance claims adjuster. A claimant is describing a car incident on their insurance policy"
+demo_key = "521585"
+opening = "Hi, I'm calling about policy 521585. I crashed my Saab around six in the morning."
+
+# Type defaults, overridable per field below.
+[rules]
+datetime = { window_hours = 1 }
+hour = { window_hours = 1 }
+number = { pct = 0.10 }
+
+[fields]
+incident_date = { type = "datetime", label = "incident date", window_hours = 48 }
+incident_hour_of_the_day = { type = "hour", label = "hour of the incident" }
+incident_city = { type = "place", label = "city" }
+incident_state = { type = "place", label = "state" }
+incident_location = { type = "place", label = "street address" }
+incident_type = { type = "category", label = "incident type", values = ["Single Vehicle Collision", "Multi-vehicle Collision", "Parked Car", "Vehicle Theft"] }
+collision_type = { type = "category", label = "collision type", values = ["Front Collision", "Rear Collision", "Side Collision"] }
+incident_severity = { type = "category", label = "severity", values = ["Trivial Damage", "Minor Damage", "Major Damage", "Total Loss"] }
+authorities_contacted = { type = "category", label = "authorities contacted", values = ["Police", "Fire", "Ambulance", "Other", "None"] }
+number_of_vehicles_involved = { type = "number", label = "vehicles involved", abs = 1 }
+bodily_injuries = { type = "number", label = "bodily injuries", abs = 1 }
+witnesses = { type = "number", label = "witnesses", abs = 1 }
+property_damage = { type = "category", label = "property damage", values = ["YES", "NO"] }
+police_report_available = { type = "category", label = "police report", values = ["YES", "NO"] }
+total_claim_amount = { type = "number", label = "total claim amount" }
+injury_claim = { type = "number", label = "injury claim" }
+property_claim = { type = "number", label = "property claim" }
+vehicle_claim = { type = "number", label = "vehicle claim" }
+auto_make = { type = "category", label = "car make" }
+auto_model = { type = "category", label = "car model" }
+auto_year = { type = "number", label = "car year", abs = 1 }
+policy_deductable = { type = "number", label = "deductible", pct = 0 }
+policy_state = { type = "place", label = "policy state" }
+
+# Spoken synonym -> the dataset's value. Applied inside SurrealDB.
+[aliases]
+yes = "YES"
+y = "YES"
+true = "YES"
+yep = "YES"
+no = "NO"
+n = "NO"
+false = "NO"
+"none filed" = "NO"
+"south carolina" = "SC"
+"north carolina" = "NC"
+"new york" = "NY"
+ohio = "OH"
+pennsylvania = "PA"
+virginia = "VA"
+"west virginia" = "WV"
+illinois = "IL"
+indiana = "IN"
+
+# One record bundled so --offline runs without the dataset (row policy_number = 521585).
+[demo_record]
+policy_number = "521585"
+incident_date = "2015-01-25"
+incident_hour_of_the_day = "5"
+incident_city = "Columbus"
+incident_state = "SC"
+incident_location = "9935 4th Drive"
+incident_type = "Single Vehicle Collision"
+collision_type = "Side Collision"
+incident_severity = "Major Damage"
+authorities_contacted = "Police"
+number_of_vehicles_involved = "1"
+bodily_injuries = "1"
+witnesses = "2"
+property_damage = "YES"
+police_report_available = "YES"
+total_claim_amount = "71610"
+injury_claim = "6510"
+property_claim = "13020"
+vehicle_claim = "52080"
+auto_make = "Saab"
+auto_model = "92x"
+auto_year = "2004"
+policy_deductable = "1000"
+policy_state = "OH"
+
+# The offline script: one consistent claim, one near-miss that gets corrected,
+# one conflict, one claim the records can't check.
+[[offline]]
+said = "Hi, I'm calling about policy 521585. I was driving my Saab when it happened."
+claims = [{ field = "auto_make", value = "Saab", quote = "I was driving my Saab" }]
+
+[[offline]]
+said = "It was early, around six in the morning."
+claims = [{ field = "incident_hour_of_the_day", value = "6", quote = "around six in the morning", confidence = 0.85 }]
+
+[[offline]]
+said = "Five? Yes, you're right, it was five."
+claims = [{ field = "incident_hour_of_the_day", value = "5", quote = "you're right, it was five", revises = true }]
+
+[[offline]]
+said = "And it was a rear collision. Somebody went into the back of me."
+claims = [{ field = "collision_type", value = "Rear Collision", quote = "it was a rear collision" }]
+
+[[offline]]
+said = "It was pouring with rain, too."
+claims = [{ field = "other:weather", value = "raining", quote = "It was pouring with rain" }]
+
+# The autopilot speaker (an LLM playing the real record holder): how their memory is off.
+[autopilot]
+fuzz = "you are about an hour off on the time, you round money to a nice number, and you believe it was a rear collision"

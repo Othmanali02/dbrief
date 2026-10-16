@@ -1,32 +1,36 @@
-"""DBrief: the claims desk. Player mode, autopilot, loading memory, and the CLI."""
+"""DBrief CLI: talk to the agent, run autopilot, load a dataset into memory."""
 from __future__ import annotations
 
 import argparse
-import json
-import os
 import time
+from pathlib import Path
 
 from rich.text import Text
 
 from . import ui
+from .domain import Domain, profile, write_draft
 from .ledger import Ledger
-from .memory import DEMO_POLICY, open_memory
+from .memory import open_memory
 from .session import Session
 
 
-def build(live: bool, memory_enabled: bool = True, resume: bool = False, db_url: str | None = None,
-          policy: str = DEMO_POLICY) -> Session:
-    memory, note = open_memory(offline=not live)
-    ledger = Ledger(db_url, fresh=not resume)
+def build(domain: Domain, live: bool, memory_enabled: bool = True, resume: bool = False,
+          db_url: str | None = None, key: str | None = None) -> Session:
+    key = key or domain.demo_key
+    if not key:
+        raise SystemExit(f"domain {domain.name!r} has no demo_key: pass --key <{domain.key}>")
+    ui.set_domain(domain)
+    memory, note = open_memory(domain, offline=not live)
+    ledger = Ledger(domain, db_url, fresh=not resume)
     if live:
-        from .adjuster import Adjuster, Extractor
-        factory = lambda tools: Adjuster(tools, memory_enabled=memory_enabled)  # noqa: E731
-        extractor = Extractor()
+        from .agents import Agent, Extractor
+        factory = lambda tools: Agent(domain, tools, memory_enabled=memory_enabled)  # noqa: E731
+        extractor = Extractor(domain)
     else:
-        from .offline import ScriptedAdjuster, ScriptedExtractor
-        factory = lambda tools: ScriptedAdjuster(tools, policy, memory_enabled=memory_enabled)  # noqa: E731
-        extractor = ScriptedExtractor()
-    return Session(ledger, memory, factory, extractor, policy=policy, memory_enabled=memory_enabled,
+        from .offline import ScriptedAgent, ScriptedExtractor
+        factory = lambda tools: ScriptedAgent(domain, tools, key, memory_enabled=memory_enabled)  # noqa: E731
+        extractor = ScriptedExtractor(domain)
+    return Session(domain, ledger, memory, factory, extractor, key=key, memory_enabled=memory_enabled,
                    memory_note=note)
 
 
@@ -38,7 +42,7 @@ def mode_label(s: Session, live: bool) -> str:
     ]))
 
 
-def turn(s: Session, said: str, who: str = "CLAIMANT") -> dict:
+def turn(s: Session, said: str, who: str | None = None) -> dict:
     ui.render_said(s.ledger.turn_count() + 1, said, who)
     with ui.console.status("[grey50]DBrief is checking the records…[/]", spinner="dots"):
         res = s.ask(said)
@@ -52,17 +56,17 @@ def turn(s: Session, said: str, who: str = "CLAIMANT") -> dict:
 
 # ================================================================== play =====
 def play(s: Session, live: bool) -> None:
-    ui.banner(mode_label(s, live), s.memory.backend, s.memory_note, s.policy)
+    ui.banner(mode_label(s, live), s.memory.backend, s.memory_note, s.key)
     if s.ledger.turn_count():
-        ui.console.print(Text(f"  Resumed: {s.ledger.turn_count()} turns in the ledger. The adjuster starts with no "
+        ui.console.print(Text(f"  Resumed: {s.ledger.turn_count()} turns in the ledger. The agent starts with no "
                               f"conversation history: it can only recall the earlier turns through memory.",
                               style="bold magenta"))
-    ui.console.print(ui.HELP)
-    ui.console.print(Text(f"\n  Try: Hi, I'm calling about policy {s.policy}. I crashed my Saab around six in the morning.\n",
-                          style="grey50"))
+    ui.console.print(ui.help_text())
+    if s.domain.opening:
+        ui.console.print(Text(f"\n  Try: {s.domain.opening}\n", style="grey50"))
     while True:
         try:
-            line = ui.console.input("[bold cyan]claimant ›[/] ").strip()
+            line = ui.console.input(f"[bold cyan]{s.domain.speaker} ›[/] ").strip()
         except (EOFError, KeyboardInterrupt):
             ui.console.print()
             return
@@ -84,7 +88,7 @@ def handle_command(s: Session, line: str) -> bool:
         ui.render_summary(L.review())
         return True
     if cmd == "/help":
-        ui.console.print(ui.HELP)
+        ui.console.print(ui.help_text())
     elif cmd == "/board":
         ui.render_board(L)
     elif cmd == "/flags":
@@ -96,38 +100,39 @@ def handle_command(s: Session, line: str) -> bool:
         else:
             ui.render_why(L, s.memory, rows[int(arg) - 1], int(arg))
     elif cmd == "/trace":
-        n = int(arg) if arg.isdigit() else L.turn_count()
-        ui.render_trace(L, s.memory, n)
+        ui.render_trace(L, s.memory, int(arg) if arg.isdigit() else L.turn_count())
     elif cmd == "/inspect":
-        ui.render_inspect(s.memory, arg or f"policy:{s.policy}")
+        ui.render_inspect(s.memory, arg or s.subject)
     elif cmd == "/blame":
         ui.render_blame(L, int(arg)) if arg.isdigit() else ui.console.print("  /blame TURN")
     elif cmd == "/rewind":
         ui.render_rewind(L, int(arg)) if arg.isdigit() else ui.console.print("  /rewind TURN")
     elif cmd == "/memory":
-        ui.render_memory(s.memory, s.policy, s.scope)
+        ui.render_memory(s.memory, s.key, s.scope)
     elif cmd == "/sql":
         ui.render_sql(L)
     elif cmd == "/review":
         ui.console.print(ui.review_bar(L.review()))
     else:
-        ui.console.print(ui.HELP)
+        ui.console.print(ui.help_text())
     return False
 
 
 # ============================================================= autopilot =====
 def autopilot(s: Session, live: bool, max_turns: int = 8, step: bool = True, pace: float = 0.0) -> dict:
     if live:
-        from .adjuster import ClaimantAgent
-        from .memory import demo_rows
-        row = next(r for r in demo_rows() if r["policy_number"] == s.policy)
-        claimant = ClaimantAgent(row)
+        from .agents import SpeakerAgent
+        row = s.domain.row(s.key)
+        if not row:
+            raise SystemExit(f"no row with {s.domain.key} = {s.key} in the dataset")
+        speaker = SpeakerAgent(s.domain, row)
     else:
-        from .offline import ScriptedClaimant
-        claimant = ScriptedClaimant()
-    ui.banner("AUTOPILOT · " + mode_label(s, live), s.memory.backend, s.memory_note, s.policy)
+        from .offline import ScriptedSpeaker
+        speaker = ScriptedSpeaker(s.domain)
+    ui.banner("AUTOPILOT · " + mode_label(s, live), s.memory.backend, s.memory_note, s.key)
     if step:
-        ui.console.print(Text("  A claimant agent plays the real policyholder. Press Enter to advance.\n", style="grey50"))
+        ui.console.print(Text(f"  A {s.domain.speaker} agent plays the real record holder. Press Enter to advance.\n",
+                              style="grey50"))
     last = ""
     for _ in range(max_turns):
         if step:
@@ -137,63 +142,93 @@ def autopilot(s: Session, live: bool, max_turns: int = 8, step: bool = True, pac
                 break
         elif pace:
             time.sleep(pace)
-        said = claimant.say(last)
+        said = speaker.say(last)
         if not said:
             break
-        last = turn(s, said, who="CLAIMANT · autopilot")["answer"]
+        last = turn(s, said, who=f"{s.domain.speaker.upper()} · autopilot")["answer"]
     rv = s.ledger.review()
     ui.render_summary(rv)
     return rv
 
 
 # ================================================================== load =====
-def load_memory(n: int, local_only: bool = False) -> None:
-    """Authoritative memory: one `policy` entity per dataset row, one attribute per checkable field."""
-    from .memory import AgentMemory, LocalMemory, dataset_path, demo_rows
-    rows = demo_rows(n)
-    ui.console.print(f"  dataset: {dataset_path() or 'bundled demo policy only'} · {len(rows)} policies")
+def load(domain_name: str | None, csv_path: str | None, key: str | None, name: str | None, n: int,
+         batch: int, local_only: bool) -> None:
+    """Load a dataset into memory. With a CSV: profile it and write a draft domain file first."""
+    from .memory import AgentMemory, LocalMemory
+    if csv_path:
+        path = Path(csv_path)
+        if not path.exists():
+            raise SystemExit(f"no such file: {path}")
+        if not key:
+            raise SystemExit("dbrief load <csv> needs --key <column>: the column that identifies a record")
+        name = name or path.stem.lower().replace(" ", "_").replace("-", "_")
+        fields = profile(path, key)
+        import csv
+        first = next(csv.DictReader(open(path, newline="", encoding="utf-8-sig")), {}).get(key)
+        draft = write_draft(name, path, key, fields, first)
+        ui.console.print(f"  domain file: {draft}" + ("" if draft.stat().st_mtime > time.time() - 5 else " (exists, kept)"))
+        for f, spec in fields.items():
+            vals = f"  [{', '.join(spec['values'][:6])}{'…' if len(spec.get('values', [])) > 6 else ''}]" if spec.get("values") else ""
+            ui.console.print(f"    {f:32} {spec['type']}{vals}", highlight=False)
+        domain = Domain.load(name)
+    else:
+        domain = Domain.load(domain_name)
+    rows = domain.rows(n)
+    ui.console.print(f"  {domain.display}: {domain.csv_path() or 'bundled demo record only'} · {len(rows)} rows · "
+                     f"{len(domain.fields)} checked fields · key {domain.key}")
+    backend = "local SurrealDB memory"
     if not local_only:
         hosted = AgentMemory.from_env()
         if hosted:
             hosted.timeout = 900
             t0 = time.perf_counter()
-            hosted.load(rows, log=ui.console.print)
-            ui.console.print(f"  SurrealDB Agent Memory: {len(rows)} policies in {time.perf_counter() - t0:.1f} s")
+            hosted.load(domain, rows, batch=batch, log=ui.console.print)
+            ui.console.print(f"  SurrealDB Agent Memory: {len(rows)} rows in {time.perf_counter() - t0:.1f} s "
+                             f"(scope {domain.scope})")
+            backend = hosted.backend
         else:
-            ui.console.print("[yellow]  SPECTRON_* not set: skipping hosted Agent Memory[/]")
-    local = LocalMemory()
-    local.db.query("DELETE mem_attr;")
-    local.load(rows, log=ui.console.print)
+            ui.console.print("[yellow]  SPECTRON_* not set: local memory only[/]")
+    local = LocalMemory(domain)
+    local.db.query("DELETE mem_attr WHERE scope = $s;", {"s": domain.scope + "/"})
+    local.load(domain, rows, log=ui.console.print)
+    domain.mark_loaded(len(rows), backend)
+    ui.console.print(f"  run it: dbrief --domain {domain.name}" + ("" if domain.demo_key else f" --key <{domain.key}>"))
 
 
 # =================================================================== cli =====
 def main(argv: list[str] | None = None) -> None:
-    p = argparse.ArgumentParser(prog="dbrief", description="An insurance claims agent whose memory knows the "
-                                "difference between what you said and what the records say.")
+    p = argparse.ArgumentParser(prog="dbrief", description="Agent memory that knows the difference between what "
+                                "you said and what the records say, for any dataset.")
     p.add_argument("mode", nargs="?", default="play", choices=["play", "autopilot", "load"])
+    p.add_argument("csv", nargs="?", default=None, help="load: a CSV to profile and load")
+    p.add_argument("--domain", default=None, help="domains/<name>.toml (default: DBRIEF_DOMAIN, or the only domain)")
+    p.add_argument("--key", default=None, help="load: the CSV's key column; play/autopilot: which record to talk about")
+    p.add_argument("--name", default=None, help="load: the domain name (default: the CSV file name)")
     p.add_argument("--offline", action="store_true", help="no network: scripted words, local memory, real ledger")
     p.add_argument("--no-memory", action="store_true", help="proof: memory tools off, nothing can be cited or verified")
     p.add_argument("--resume", action="store_true", help="proof: new process, earlier turns only reachable through memory")
-    p.add_argument("--policy", default=DEMO_POLICY)
     p.add_argument("--db", default=None, help="ledger SurrealDB URL (default surrealkv+versioned://.dbrief-db)")
     p.add_argument("--turns", type=int, default=8, help="autopilot turn limit")
     p.add_argument("--no-step", action="store_true", help="autopilot runs without waiting for Enter")
     p.add_argument("--pace", type=float, default=0.0, help="autopilot seconds between turns with --no-step")
-    p.add_argument("--rows", type=int, default=300, help="load: how many dataset rows (the demo policy first)")
+    p.add_argument("--rows", type=int, default=300, help="load: how many rows (the demo record first)")
+    p.add_argument("--batch", type=int, default=50, help="load: rows per Agent Memory request")
     p.add_argument("--local", action="store_true", help="load: local SurrealDB memory only")
     p.add_argument("--record", default=None, help="save the session transcript: name.svg or name.html")
     a = p.parse_args(argv)
     if a.mode == "load":
-        load_memory(a.rows, local_only=a.local)
+        load(a.domain, a.csv, a.key, a.name, a.rows, a.batch, a.local)
         return
     if a.record:
         ui.console.record = True
-    from .adjuster import has_claude
+    from .agents import has_claude
     live = not a.offline
     if live and not has_claude():
         ui.console.print("[yellow]No ANTHROPIC_API_KEY: running --offline (scripted words, real memory and ledger).[/]")
         live = False
-    s = build(live, memory_enabled=not a.no_memory, resume=a.resume, db_url=a.db, policy=a.policy)
+    domain = Domain.load(a.domain)
+    s = build(domain, live, memory_enabled=not a.no_memory, resume=a.resume, db_url=a.db, key=a.key)
     try:
         if a.mode == "autopilot":
             autopilot(s, live, max_turns=a.turns, step=not a.no_step, pace=a.pace)
@@ -202,7 +237,7 @@ def main(argv: list[str] | None = None) -> None:
     finally:
         if a.record:
             save = ui.console.save_html if a.record.endswith(".html") else ui.console.save_svg
-            kwargs = {} if a.record.endswith(".html") else {"title": "DBrief · the claimant talks, the database checks"}
+            kwargs = {} if a.record.endswith(".html") else {"title": "DBrief · what you said vs what the records say"}
             save(a.record, **kwargs)
             print(f"saved {a.record}")
 

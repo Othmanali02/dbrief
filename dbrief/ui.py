@@ -8,7 +8,6 @@ from rich.rule import Rule
 from rich.table import Table
 from rich.text import Text
 
-from .fields import FIELDS
 from .ledger import hhmm
 
 console = Console(highlight=False)
@@ -26,8 +25,20 @@ def clip(s: str, n: int) -> str:
     return s if len(s) <= n else s[: n - 1].rstrip() + "…"
 
 
+DOMAIN = None   # the active domain, set by the CLI
+
+
+def set_domain(domain) -> None:
+    global DOMAIN
+    DOMAIN = domain
+
+
+def speaker() -> str:
+    return DOMAIN.speaker if DOMAIN else "speaker"
+
+
 def label(field: str) -> str:
-    return FIELDS.get(field, {}).get("label", field.split(":", 1)[-1].replace("_", " "))
+    return DOMAIN.label(field) if DOMAIN else field.split(":", 1)[-1].replace("_", " ")
 
 
 def status_text(status: str | None) -> Text:
@@ -36,13 +47,16 @@ def status_text(status: str | None) -> Text:
 
 
 # --------------------------------------------------------------- headers ----
-def banner(mode: str, backend: str, note: str | None, policy: str) -> None:
+def banner(mode: str, backend: str, note: str | None, key: str) -> None:
+    d = DOMAIN
     title = Text()
     title.append("DBrief", style="bold white")
-    title.append("   the claimant talks · the database checks", style="italic grey62")
+    title.append("   what you said vs what the records say", style="italic grey62")
     console.print(Panel(title, box=box.HEAVY, border_style="grey35", padding=(0, 2)))
     meta = Text()
-    meta.append(f"CLAIM  policy {policy}", style="bold")
+    rows = d.loaded().get("rows")
+    meta.append(f"DOMAIN  {d.display}" + (f" · {rows} rows loaded" if rows else ""), style="bold")
+    meta.append(f"   ·   {d.entity} {key}", style="bold")
     meta.append(f"   ·   memory: {backend}", style="bold cyan")
     meta.append(f"   ·   {mode}", style="grey62")
     console.print(meta)
@@ -66,7 +80,8 @@ def review_bar(rv: dict) -> Text:
 
 
 # ----------------------------------------------------------------- turns ----
-def render_said(n: int, said: str, who: str = "CLAIMANT") -> None:
+def render_said(n: int, said: str, who: str | None = None) -> None:
+    who = who or speaker().upper()
     console.print(Rule(Text(f" TURN {n:02d} ", style="bold black on grey70"), style="grey35", align="left"))
     t = Text(f"  {who}  ", style="bold cyan")
     t.append(said, style="cyan")
@@ -153,10 +168,10 @@ def render_turn(res: dict) -> None:
 def flag_panel(f: dict, idx: int | None = None) -> Panel:
     potential = f.get("certainty") == "potential"
     if f["kind"] == "record":
-        head = "NEAR-MISS · CHECK WITH CLAIMANT" if f["status"] == "near-miss" else "CONFLICT WITH RECORD"
+        head = f"NEAR-MISS · CHECK WITH {speaker().upper()}" if f["status"] == "near-miss" else "CONFLICT WITH RECORD"
         against = f"{f.get('ref')} · trace {f.get('trace_id') or '—'}"
     else:
-        head = "CLAIMANT CHANGED THEIR ACCOUNT"
+        head = f"{speaker().upper()} CHANGED THEIR ACCOUNT"
         against = f"their turn {f.get('other_turn')}: “{clip(f.get('other_quote') or '', 50)}”"
     style = "yellow" if potential else "red1"
     body = Text()
@@ -180,13 +195,13 @@ def render_flag_list(rows: list[dict]) -> None:
 
 
 def render_board(ledger) -> None:
-    """Field by field: what the claimant said (and corrected), what the record says, the verdict."""
+    """Field by field: what the speaker said (and corrected), what the record says, the verdict."""
     rows: dict[str, list[dict]] = {}
     for c in ledger.claims():
         rows.setdefault(c["field"], []).append(c)
     tab = Table(box=box.SIMPLE_HEAD, padding=(0, 1), title="[bold]CLAIM BOARD[/]  "
-                "[grey50]the claimant's words vs the record recalled from memory[/]", title_justify="left")
-    for col in ("field", "claimant said", "record (memory)", "verdict", "turn"):
+                f"[grey50]the {speaker()}'s words vs the record recalled from memory[/]", title_justify="left")
+    for col in ("field", f"{speaker()} said", "record (memory)", "verdict", "turn"):
         tab.add_column(col)
     for field, cs in rows.items():
         said = Text()
@@ -243,7 +258,7 @@ def render_trace(ledger, memory, n: int) -> None:
 
 
 def render_inspect(memory, ref: str) -> None:
-    rec = memory.inspect(ref if ":" in ref else f"policy:{ref}")
+    rec = memory.inspect(ref if ":" in ref else DOMAIN.ref(ref))
     if not rec["found"]:
         console.print(Text(f"  {rec['ref']}: not in memory.", style="yellow"))
         return
@@ -260,7 +275,7 @@ def render_why(ledger, memory, f: dict, idx: int) -> None:
     """Flag -> the words -> the trace that recalled the record -> the record value."""
     turn = ledger.q("SELECT n, question, answer, at FROM turn WHERE n = $n;", {"n": f["turn"]})[0]
     body = Text()
-    body.append("WHAT THE CLAIMANT SAID\n", style="bold")
+    body.append(f"WHAT THE {speaker().upper()} SAID\n", style="bold")
     body.append(f"  turn {turn['n']} · {hhmm(turn['at'])} real time\n", style="grey50")
     body.append(f"  “{turn['question']}”\n", style="cyan")
     body.append("\nWHAT WAS FILED\n", style="bold")
@@ -319,7 +334,7 @@ def render_blame(ledger, n: int) -> None:
 
 
 def render_rewind(ledger, n: int) -> None:
-    """System time: the claimant's live account as the ledger held it at the end of turn n."""
+    """System time: the speaker's live account as the ledger held it at the end of turn n."""
     nxt = ledger.turn_time(n + 1)
     when = nxt if nxt is not None else ledger.now()
     try:
@@ -338,8 +353,8 @@ def render_rewind(ledger, n: int) -> None:
     console.print(tab)
 
 
-def render_memory(memory, policy: str, scope: str) -> None:
-    r = memory.recall(f"what the claimant on policy {policy} said", scopes=[scope], k=10)
+def render_memory(memory, key: str, scope: str) -> None:
+    r = memory.recall(f"what the {speaker()} on {DOMAIN.entity} {key} said", scopes=[scope], k=10)
     tab = Table(box=box.SIMPLE_HEAD, padding=(0, 1), title=f"[bold]EXPERIENTIAL MEMORY[/]  [grey50]scope "
                 f"{scope} · trace {r.get('trace_id')} · {r['ms']:.0f} ms[/]", title_justify="left")
     tab.add_column("id")
@@ -361,12 +376,16 @@ def render_sql(ledger) -> None:
         console.print(Syntax(ledger.queries[-1], "sql", theme="ansi_dark", word_wrap=True))
 
 
-HELP = """[bold]Talk as the claimant, in plain words.[/] Commands:
+def help_text() -> str:
+    return HELP.replace("SPEAKER", speaker()).replace("REFEX", DOMAIN.ref(DOMAIN.demo_key or "KEY") if DOMAIN else "entity:key")
+
+
+HELP = """[bold]Talk as the SPEAKER, in plain words.[/] Commands:
   [cyan]/board[/]             field by field: what you said vs the record, and the verdict
   [cyan]/flags[/]             every near-miss and conflict on record
   [cyan]/why N[/]             flag N -> your words -> the memory trace -> the record
   [cyan]/trace T[/]           the receipt for turn T: what memory retrieved, what was cited
-  [cyan]/inspect REF[/]       read a record from memory, e.g. /inspect policy:521585
+  [cyan]/inspect REF[/]       read a record from memory, e.g. /inspect REFEX
   [cyan]/blame T[/]           every claim from turn T and what it collided with
   [cyan]/rewind T[/]          time travel: the account as the ledger held it after turn T
   [cyan]/memory[/]            experiential memory: what memory holds about this conversation
@@ -378,5 +397,5 @@ HELP = """[bold]Talk as the claimant, in plain words.[/] Commands:
 def render_summary(rv: dict) -> None:
     console.print(Panel(review_bar(rv), title="[bold]CLAIM REVIEW[/]", title_align="left",
                         border_style="cyan", box=box.DOUBLE, padding=(0, 1)))
-    console.print(Text("  The claimant talks. The database checks. Every verdict traces back to a memory record.",
+    console.print(Text("  What you said vs what the records say. Every verdict traces back to a memory record.",
                        style="bold"))

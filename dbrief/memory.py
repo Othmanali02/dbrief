@@ -1,8 +1,8 @@
-"""The adjuster's memory. Two backends, one interface:
+"""The agent's memory. Two backends, one interface:
 
   recall(query, scopes, k) -> hits + trace_id      what memory returned, and the receipt
-  inspect(ref)             -> a record's fields     e.g. inspect("policy:521585")
-  remember(text, scopes)   -> store experiential memory (what the claimant said)
+  inspect(ref)             -> a record's fields     e.g. inspect("<entity>:<key>")
+  remember(text, scopes)   -> store experiential memory (what the speaker said)
   trace(trace_id)          -> what a recall retrieved, from the memory's own trace log
 
 AgentMemory talks to hosted SurrealDB Agent Memory over REST. LocalMemory keeps the same
@@ -10,7 +10,6 @@ shape in an embedded SurrealDB, for offline runs and as the automatic fallback.
 """
 from __future__ import annotations
 
-import csv
 import json
 import os
 import re
@@ -21,17 +20,7 @@ import uuid
 from pathlib import Path
 from typing import Any
 
-from .fields import ENTITY_TYPE, FIELDS, KEY_FIELD
-
 ROOT = Path(__file__).resolve().parent.parent
-DATA = Path(__file__).resolve().parent / "data"
-SCOPE = "dbrief"
-DEMO_POLICY = "521585"
-
-
-def claimant_scope(policy: str, session: str | None = None) -> str:
-    """Experiential memory for one claimant conversation: dbrief/claimant/<policy>/<session>."""
-    return f"{SCOPE}/claimant/{policy}" + (f"/{session}" if session else "")
 
 
 def env(name: str, default: str | None = None) -> str | None:
@@ -50,32 +39,11 @@ def entity_ref(entity_type: str, name: str) -> str:
     return f"{entity_type}:{name}"
 
 
-def sentence(name: str, key: str, value: str) -> str:
-    return f"{name}'s {FIELDS.get(key, {}).get('label', key.replace('_', ' '))} is {value}"
-
-
-# ------------------------------------------------------------------ dataset ---
-def dataset_path() -> Path | None:
-    for p in (env("DBRIEF_DATA"), ROOT / "insurance_claims.csv", ROOT.parent / "insurance_claims.csv"):
-        if p and Path(p).exists():
-            return Path(p)
-    return None
-
-
-def record_fields(row: dict) -> dict[str, str]:
-    """The fields of one CSV row that go into memory. Unknown values ('?') are left out."""
-    return {k: row[k].strip() for k in FIELDS if row.get(k, "").strip() not in ("", "?")}
-
-
-def demo_rows(n: int = 300) -> list[dict]:
-    """The demo policy plus the next rows of the dataset, in file order (deterministic)."""
-    path = dataset_path()
-    if not path:
-        return [json.loads((DATA / "demo_policy.json").read_text())]
-    rows = list(csv.DictReader(open(path, newline="", encoding="utf-8-sig")))
-    demo = [r for r in rows if r[KEY_FIELD] == DEMO_POLICY]
-    rest = [r for r in rows if r[KEY_FIELD] != DEMO_POLICY]
-    return (demo + rest)[:n]
+def _split(ref: str) -> tuple[str, str]:
+    etype, _, name = ref.partition(":")
+    if not name:
+        raise ValueError(f"expected <entity>:<key>, got {ref!r}")
+    return etype, name
 
 
 # ============================================================ AGENT MEMORY ====
@@ -127,8 +95,8 @@ class AgentMemory:
         self._scopes.add(path)
 
     # --- the interface
-    def recall(self, query: str, scopes: list[str] | None = None, k: int = 8) -> dict:
-        data, ms = self._call("POST", "/query", {"query": query, "k": k, "lens": scopes or [SCOPE]})
+    def recall(self, query: str, scopes: list[str], k: int = 8) -> dict:
+        data, ms = self._call("POST", "/query", {"query": query, "k": k, "lens": scopes})
         hits = []
         for h in data.get("hits", []):
             res = h.get("resource") or {}
@@ -140,9 +108,7 @@ class AgentMemory:
                 "tier": tr.get("resolutionTier") or data.get("tier"), "ms": ms}
 
     def inspect(self, ref: str) -> dict:
-        etype, _, name = ref.partition(":")
-        if not name:
-            etype, name = ENTITY_TYPE, ref
+        etype, name = _split(ref)
         try:
             data, ms = self._call("GET", f"/entities/{etype}/{name}")
         except MemoryError_ as e:
@@ -176,18 +142,18 @@ class AgentMemory:
                 "latency_ms": data.get("latencyMs"), "retrieved": retrieved, "returned": returned, "ms": ms}
 
     # --- authoritative load
-    def load(self, rows: list[dict], batch: int = 200, log=print) -> int:
-        self.ensure_scope(SCOPE)
+    def load(self, domain, rows: list[dict], batch: int = 200, log=print) -> int:
+        self.ensure_scope(domain.scope)
         n = 0
         for i in range(0, len(rows), batch):
             chunk = rows[i:i + batch]
-            triples = [{"entity": {"type": ENTITY_TYPE, "name": r[KEY_FIELD]}, "key": k, "value": v}
-                       for r in chunk for k, v in record_fields(r).items()]
+            triples = [{"entity": {"type": domain.entity, "name": str(r[domain.key])}, "key": k, "value": v}
+                       for r in chunk for k, v in domain.record_fields(r).items()]
             _, ms = self._call("POST", "/facts", {
-                "text": f"Insurance claims dataset, policies {chunk[0][KEY_FIELD]}..{chunk[-1][KEY_FIELD]}",
-                "infer": "triples", "triples": triples, "scopes": [SCOPE]})
+                "text": f"{domain.display}: {domain.entity} {chunk[0][domain.key]}..{chunk[-1][domain.key]}",
+                "infer": "triples", "triples": triples, "scopes": [domain.scope]})
             n += len(chunk)
-            log(f"  batch {i // batch + 1}: {len(chunk)} policies, {len(triples)} triples, {ms:.0f} ms")
+            log(f"  batch {i // batch + 1}: {len(chunk)} {domain.entity} records, {len(triples)} triples, {ms:.0f} ms")
         return n
 
 
@@ -204,8 +170,9 @@ class LocalMemory:
     """Same interface, embedded SurrealDB. Persists in .dbrief-memory so --resume works offline too."""
     backend = "local SurrealDB memory"
 
-    def __init__(self, url: str | None = None):
+    def __init__(self, domain, url: str | None = None):
         from surrealdb import Surreal
+        self.domain = domain
         self.url = url or env("DBRIEF_MEMORY_URL", "surrealkv://.dbrief-memory")
         self.db = Surreal(self.url)
         self.db.use("dbrief", "memory")
@@ -215,18 +182,17 @@ class LocalMemory:
                 self.db.query(f"DEFINE INDEX OVERWRITE {name} ON {table} FIELDS {field} FULLTEXT ANALYZER mem_text BM25;")
             except Exception:  # noqa: BLE001 - SurrealDB 2.x syntax
                 self.db.query(f"DEFINE INDEX OVERWRITE {name} ON {table} FIELDS {field} SEARCH ANALYZER mem_text BM25;")
-        if not self.db.query("SELECT VALUE id FROM mem_attr LIMIT 1;"):
-            self.load(demo_rows(), log=lambda *_: None)
+        if not self.db.query("SELECT VALUE id FROM mem_attr WHERE scope = $s LIMIT 1;", {"s": domain.scope + "/"}):
+            self.load(domain, domain.rows(), log=lambda *_: None)
 
     @staticmethod
     def _terms(query: str) -> list[str]:
         stop = set("a an the and or of to in on at for is was were what which who my me i it this that "
-                   "policy claim about with did do does".split())
+                   "record about with did do does".split())
         return [w for w in re.findall(r"[a-z0-9]+", query.lower()) if w not in stop][:8]
 
-    def recall(self, query: str, scopes: list[str] | None = None, k: int = 8) -> dict:
+    def recall(self, query: str, scopes: list[str], k: int = 8) -> dict:
         t0 = time.perf_counter()
-        scopes = scopes or [SCOPE]
         terms = self._terms(query) or [query.lower()]
         where = " OR ".join(f"text @{i + 1}@ $t{i}" for i in range(len(terms)))
         params = {f"t{i}": t for i, t in enumerate(terms)}
@@ -257,9 +223,7 @@ class LocalMemory:
 
     def inspect(self, ref: str) -> dict:
         t0 = time.perf_counter()
-        etype, _, name = ref.partition(":")
-        if not name:
-            etype, name = ENTITY_TYPE, ref
+        etype, name = _split(ref)
         rows = self.db.query("SELECT id, key, value FROM mem_attr WHERE etype = $t AND name = $n;",
                              {"t": etype, "n": name}) or []
         return {"ref": entity_ref(etype, name), "found": bool(rows),
@@ -283,14 +247,14 @@ class LocalMemory:
                 "latency_ms": t["latency_ms"], "retrieved": [x["id"] for x in t["returned"]],
                 "returned": t["returned"], "ms": (time.perf_counter() - t0) * 1000}
 
-    def load(self, rows: list[dict], batch: int = 200, log=print) -> int:
+    def load(self, domain, rows: list[dict], batch: int = 200, log=print) -> int:
         for i in range(0, len(rows), batch):
             chunk = rows[i:i + batch]
-            docs = [{"etype": ENTITY_TYPE, "name": r[KEY_FIELD], "key": k, "value": v, "scope": SCOPE + "/",
-                     "text": sentence(r[KEY_FIELD], k, v)}
-                    for r in chunk for k, v in record_fields(r).items()]
+            docs = [{"etype": domain.entity, "name": str(r[domain.key]), "key": k, "value": v, "scope": domain.scope + "/",
+                     "text": f"{r[domain.key]}'s {domain.label(k)} is {v}"}
+                    for r in chunk for k, v in domain.record_fields(r).items()]
             self.db.query("INSERT INTO mem_attr $docs;", {"docs": docs})
-            log(f"  local batch {i // batch + 1}: {len(chunk)} policies, {len(docs)} attributes")
+            log(f"  local batch {i // batch + 1}: {len(chunk)} {domain.entity} records, {len(docs)} attributes")
         return len(rows)
 
 
@@ -332,11 +296,11 @@ class FallbackMemory:
         return self._do("trace", trace_id)
 
 
-def open_memory(offline: bool = False) -> tuple[Any, str | None]:
+def open_memory(domain, offline: bool = False) -> tuple[Any, str | None]:
     """Returns (memory, note). note explains a fallback, for the banner."""
     if offline:
-        return LocalMemory(), "offline: local SurrealDB memory"
+        return LocalMemory(domain), "offline: local SurrealDB memory"
     hosted = AgentMemory.from_env()
     if not hosted:
-        return LocalMemory(), "SPECTRON_* not set: local SurrealDB memory"
-    return FallbackMemory(hosted, LocalMemory), None
+        return LocalMemory(domain), "SPECTRON_* not set: local SurrealDB memory"
+    return FallbackMemory(hosted, lambda: LocalMemory(domain)), None

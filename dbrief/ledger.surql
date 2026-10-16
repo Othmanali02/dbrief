@@ -1,30 +1,32 @@
 -- ============================================================================
--- DBrief — the claim ledger. The claimant talks; the database checks.
+-- DBrief — the claim ledger. What you said vs what the records say.
 --
 -- Memory (what the records say) is SurrealDB Agent Memory. This local ledger
--- holds what the claimant said, one row per typed claim with the exact words,
--- and checks every claim against the record values the adjuster recalled from
+-- holds what the speaker said, one row per typed claim with the exact words,
+-- and checks every claim against the record values the agent recalled from
 -- memory, inside the same transaction that writes the claim. Deterministic
 -- rules only: no LLM decides whether a claim matches the record.
 --
 --   consistent   the claim matches the record (after normalisation)
---   near-miss    close but not equal (hour ±1, amount ±10%, ...)   'potential'
+--   near-miss    close but not equal (by type: time window, numeric tolerance)  'potential'
 --   conflict     the record says something else                    'firm'
 --   unverified   the record has no value for this field
 --
 -- Three kinds of time:
 --   valid time  : claim.start / claim.end      (when it happened, optional)
---   known time  : claim.said_at / turn.n       (when the claimant said it)
+--   known time  : claim.said_at / turn.n       (when the speaker said it)
 --   system time : SELECT ... VERSION <datetime> (what the ledger looked like then)
 -- ============================================================================
 
 -- --------------------------------------------------------------- rules -----
 DEFINE TABLE OVERWRITE field_rule SCHEMAFULL;
-DEFINE FIELD OVERWRITE field ON field_rule TYPE string;
-DEFINE FIELD OVERWRITE kind  ON field_rule TYPE string
-    ASSERT $value IN ['enum', 'yesno', 'hour', 'count', 'year', 'amount', 'date', 'street'];
-DEFINE FIELD OVERWRITE tol   ON field_rule TYPE number;
-DEFINE FIELD OVERWRITE label ON field_rule TYPE string;
+DEFINE FIELD OVERWRITE field        ON field_rule TYPE string;
+DEFINE FIELD OVERWRITE type         ON field_rule TYPE string
+    ASSERT $value IN ['datetime', 'hour', 'number', 'category', 'place', 'text'];
+DEFINE FIELD OVERWRITE label        ON field_rule TYPE string;
+DEFINE FIELD OVERWRITE window_hours ON field_rule TYPE option<number>;   -- datetime, hour
+DEFINE FIELD OVERWRITE pct          ON field_rule TYPE option<number>;   -- number: relative tolerance
+DEFINE FIELD OVERWRITE abs          ON field_rule TYPE option<number>;   -- number: absolute tolerance (wins over pct)
 DEFINE INDEX OVERWRITE field_rule_field ON field_rule FIELDS field UNIQUE;
 
 -- Spoken synonym -> canonical value ("yep" -> YES).
@@ -34,10 +36,10 @@ DEFINE FIELD OVERWRITE canonical ON alias TYPE string;
 DEFINE INDEX OVERWRITE alias_word ON alias FIELDS word UNIQUE;
 
 -- -------------------------------------------------------------- record -----
--- A snapshot of one policy record exactly as Agent Memory returned it, with the
--- trace of the recall that surfaced it. Nothing the claimant says edits it.
+-- A snapshot of one record exactly as Agent Memory returned it, with the
+-- trace of the recall that surfaced it. Nothing the speaker says edits it.
 DEFINE TABLE OVERWRITE record SCHEMAFULL;
-DEFINE FIELD OVERWRITE ref      ON record TYPE string;              -- 'policy:521585'
+DEFINE FIELD OVERWRITE ref      ON record TYPE string;              -- '<entity>:<key>'
 DEFINE FIELD OVERWRITE fields   ON record FLEXIBLE TYPE object;     -- field -> value
 DEFINE FIELD OVERWRITE attr_ids ON record FLEXIBLE TYPE object;     -- field -> Agent Memory attribute id
 DEFINE FIELD OVERWRITE source   ON record TYPE string;              -- which memory backend
@@ -51,8 +53,8 @@ DEFINE TABLE OVERWRITE meta SCHEMALESS;   -- the conversation's session id (scop
 -- ------------------------------------------------------------------ turns ---
 DEFINE TABLE OVERWRITE turn SCHEMAFULL;
 DEFINE FIELD OVERWRITE n        ON turn TYPE int;
-DEFINE FIELD OVERWRITE question ON turn TYPE string;   -- what the claimant said
-DEFINE FIELD OVERWRITE answer   ON turn TYPE string;   -- what the adjuster replied
+DEFINE FIELD OVERWRITE question ON turn TYPE string;   -- what the speaker said
+DEFINE FIELD OVERWRITE answer   ON turn TYPE string;   -- what the agent replied
 DEFINE FIELD OVERWRITE at       ON turn TYPE datetime DEFAULT time::now();
 DEFINE INDEX OVERWRITE turn_n   ON turn FIELDS n UNIQUE;
 
@@ -73,9 +75,9 @@ DEFINE EVENT OVERWRITE check_citations ON trace WHEN $event = "CREATE" THEN {
 };
 
 -- ----------------------------------------------------------------- claims ---
--- One claim = "<field> is <value>", in the claimant's own words.
+-- One claim = "<field> is <value>", in the speaker's own words.
 DEFINE TABLE OVERWRITE claim SCHEMAFULL;
-DEFINE FIELD OVERWRITE subject      ON claim TYPE string;              -- 'policy:521585'
+DEFINE FIELD OVERWRITE subject      ON claim TYPE string;              -- '<entity>:<key>'
 DEFINE FIELD OVERWRITE field        ON claim TYPE string;
 DEFINE FIELD OVERWRITE value        ON claim TYPE string;
 DEFINE FIELD OVERWRITE start        ON claim TYPE option<datetime>;
@@ -120,28 +122,36 @@ DEFINE FUNCTION OVERWRITE fn::isnum($s: string) -> bool {
         AND string::is::numeric(array::join($parts, ''));
 };
 
--- Is a claimed value close to the record value? Pure function of its inputs.
-DEFINE FUNCTION OVERWRITE fn::near($kind: string, $tol: number, $a: string, $b: string) -> bool {
+-- "2015-01-25", "2015-01-25 05:00", "2015-01-25T05:00:00" -> datetime (or NONE).
+DEFINE FUNCTION OVERWRITE fn::todt($s: string) -> any {
+    LET $u = string::uppercase(string::replace($s, ' ', 'T'));
+    LET $c = IF string::len($u) = 10 THEN string::concat($u, 'T00:00:00Z')
+        ELSE IF string::len($u) = 16 THEN string::concat($u, ':00Z')
+        ELSE IF string::len($u) = 19 THEN string::concat($u, 'Z')
+        ELSE $u END;
+    RETURN IF string::is::datetime($c) THEN <datetime> $c ELSE NONE END;
+};
+
+-- Is a claimed value close to the record value? The rule comes from the field's type;
+-- the parameters (window_hours, pct, abs) come from the domain. Pure function of its inputs.
+DEFINE FUNCTION OVERWRITE fn::near($rule: object, $a: string, $b: string) -> bool {
     LET $num = fn::isnum($a) AND fn::isnum($b);
-    IF $kind = 'hour' AND $num {
-        LET $d = math::abs(<int> <float> $a - <int> <float> $b) % 24;
-        RETURN math::min([$d, 24 - $d]) <= $tol;
+    IF $rule.type = 'hour' AND $num {
+        LET $d = math::abs(<float> $a - <float> $b) % 24;
+        RETURN math::min([$d, 24 - $d]) <= ($rule.window_hours ?? 1);
     };
-    IF ($kind = 'count' OR $kind = 'year') AND $num {
-        RETURN math::abs(<float> $a - <float> $b) <= $tol;
+    IF $rule.type = 'number' AND $num {
+        LET $d = math::abs(<float> $a - <float> $b);
+        RETURN IF $rule.abs != NONE THEN $d <= $rule.abs ELSE $d <= ($rule.pct ?? 0) * math::abs(<float> $b) END;
     };
-    IF $kind = 'amount' AND $num {
-        RETURN math::abs(<float> $a - <float> $b) <= $tol * math::abs(<float> $b);
+    IF $rule.type = 'datetime' {
+        LET $da = fn::todt($a);
+        LET $db = fn::todt($b);
+        IF $da = NONE OR $db = NONE { RETURN false; };
+        LET $d = IF $da > $db THEN $da - $db ELSE $db - $da END;
+        RETURN duration::mins($d) <= ($rule.window_hours ?? 1) * 60;
     };
-    IF $kind = 'date' AND string::is::datetime(string::concat($a, 'T00:00:00Z'))
-                      AND string::is::datetime(string::concat($b, 'T00:00:00Z')) {
-        LET $d = <datetime> string::concat($a, 'T00:00:00Z') - <datetime> string::concat($b, 'T00:00:00Z');
-        RETURN math::abs(duration::days($d)) <= $tol;
-    };
-    IF $kind = 'street' AND array::len(string::words($a)) > 1 {
-        RETURN array::join(array::slice(string::words($a), 1), ' ') = array::join(array::slice(string::words($b), 1), ' ');
-    };
-    RETURN false;
+    RETURN false;   -- category, place, text: exact or alias match only
 };
 
 -- The verdict for one claimed value against one record value.
@@ -156,8 +166,14 @@ DEFINE FUNCTION OVERWRITE fn::verdict($field: string, $claimed: any, $expected: 
     IF fn::isnum($a) AND fn::isnum($b) AND <float> $a = <float> $b {
         RETURN { status: 'consistent', reason: 'matches the record' };
     };
-    IF fn::near($rule.kind, $rule.tol, $a, $b) {
-        RETURN { status: 'near-miss', reason: string::concat('close to the record (', $rule.kind, ')') };
+    IF $rule.type = 'datetime' AND fn::todt($a) != NONE AND fn::todt($a) = fn::todt($b) {
+        RETURN { status: 'consistent', reason: 'matches the record' };
+    };
+    IF $rule.type = 'text' {
+        RETURN { status: 'unverified', reason: 'free text is only confirmed by an exact match' };
+    };
+    IF fn::near($rule, $a, $b) {
+        RETURN { status: 'near-miss', reason: string::concat('close to the record (', $rule.type, ')') };
     };
     RETURN { status: 'conflict', reason: 'the record says otherwise' };
 };
@@ -188,7 +204,7 @@ DEFINE EVENT OVERWRITE check_claim ON claim WHEN $event = "CREATE" THEN {
             trace_id  = $rec.trace_id;
     };
 
-    -- 2. The claimant contradicts something they said earlier (live claims only).
+    -- 2. The speaker contradicts something they said earlier (live claims only).
     FOR $p IN (SELECT * FROM claim WHERE id != $c.id AND subject = $c.subject
                AND field = $c.field AND retracted = false) {
         IF fn::norm($p.value) != fn::norm($c.value) {

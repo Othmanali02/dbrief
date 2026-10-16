@@ -1,12 +1,12 @@
-"""One claims conversation: the claimant talks, memory recalls, the ledger checks.
+"""One conversation: the speaker talks, memory recalls, the ledger checks.
 
 One turn:
-  claimant text ─► memory.remember (experiential, scope dbrief/claimant/<policy>)
-                ─► extractor: typed claims (field, value, exact quote, confidence)
-                ─► adjuster tools: recall ─► inspect ─► check_claims
-                        check_claims snapshots the record as memory returned it, then
-                        fn::report files each claim ──► check_claim EVENT, same transaction
-                ─► adjuster responds, citing record ids
+  speaker text ─► memory.remember (experiential, scope <domain scope>/<speaker>/<key>/<session>)
+               ─► extractor: typed claims (field, value, exact quote, confidence)
+               ─► agent tools: recall ─► inspect ─► check_claims
+                       check_claims snapshots the record as memory returned it, then
+                       fn::report files each claim ──► check_claim EVENT, same transaction
+               ─► agent responds, citing record ids
                 ─► trace row: traces used, ids retrieved, ids cited; uncited ids found by the database
 """
 from __future__ import annotations
@@ -14,12 +14,10 @@ from __future__ import annotations
 import time
 from concurrent.futures import ThreadPoolExecutor
 
-from .memory import SCOPE, claimant_scope, entity_ref
-from .fields import ENTITY_TYPE
 
 
 class Tools:
-    """The adjuster's tools. Every fact about a policy passes through memory here."""
+    """The agent's tools. Every fact about a record passes through memory here."""
 
     def __init__(self, session: "Session"):
         self.s = session
@@ -43,7 +41,7 @@ class Tools:
             return f"error: {e}"
 
     def t_recall(self, query: str, scope: str = "records") -> str:
-        scopes = [self.s.scope] if scope == "conversation" else [SCOPE]
+        scopes = [self.s.scope] if scope == "conversation" else [self.s.domain.scope]
         r = self.s.memory.recall(query, scopes=scopes, k=8)
         self.memory_ms += r["ms"]
         self.recalls.append({**r, "query": query, "scope": scope})
@@ -59,7 +57,7 @@ class Tools:
 
     def t_inspect(self, ref: str) -> str:
         if ":" not in ref:
-            ref = entity_ref(ENTITY_TYPE, ref)
+            ref = self.s.domain.ref(ref)
         r = self.s.memory.inspect(ref)
         self.memory_ms += r["ms"]
         if not r["found"]:
@@ -70,7 +68,7 @@ class Tools:
     def t_check_claims(self, record_ref: str) -> str:
         self.s.wait_for_claims()
         if ":" not in record_ref:
-            record_ref = entity_ref(ENTITY_TYPE, record_ref)
+            record_ref = self.s.domain.ref(record_ref)
         if record_ref not in self.inspected:
             self.t_inspect(record_ref)
         rec = self.inspected.get(record_ref)
@@ -80,8 +78,8 @@ class Tools:
             self.s.ledger.snapshot(rec, tid, self.s.memory.backend)
         self.checked = self.s.file_claims(record_ref)
         if not self.checked:
-            return "no claims in what the claimant just said"
-        return "\n".join(f"- {c['field']}: claimant said {c['value']!r} -> {c['status']}"
+            return f"no claims in what the {self.s.domain.speaker} just said"
+        return "\n".join(f"- {c['field']}: {self.s.domain.speaker} said {c['value']!r} -> {c['status']}"
                          + (f" (record: {c['record_value']})" if c.get("record_value") is not None else "")
                          for c in self.checked)
 
@@ -92,16 +90,17 @@ class Tools:
 
 
 class Session:
-    def __init__(self, ledger, memory, adjuster_factory, extractor, policy: str, memory_enabled: bool = True,
+    def __init__(self, domain, ledger, memory, agent_factory, extractor, key: str, memory_enabled: bool = True,
                  memory_note: str | None = None):
+        self.domain = domain
         self.ledger = ledger
         self.memory = memory
         self.extractor = extractor
-        self.policy = policy
+        self.key = key
         self.memory_enabled = memory_enabled
         self.memory_note = memory_note
         self.tools = Tools(self)
-        self.adjuster = adjuster_factory(self.tools)
+        self.agent = agent_factory(self.tools)
         self._pending: list[dict] = []
         self._extracting = None
         self._pool = ThreadPoolExecutor(max_workers=2)
@@ -110,14 +109,14 @@ class Session:
 
     @property
     def scope(self) -> str:
-        return claimant_scope(self.policy, self.ledger.session_id())
+        return self.domain.conversation_scope(self.key, self.ledger.session_id())
 
     @property
     def subject(self) -> str:
-        return entity_ref(ENTITY_TYPE, self.policy)
+        return self.domain.ref(self.key)
 
     def wait_for_claims(self) -> None:
-        """The extractor runs alongside the adjuster's lookups; claims are needed only at check time."""
+        """The extractor runs alongside the agent's lookups; claims are needed only at check time."""
         if self._extracting is not None:
             self._pending = self._extracting.result()
             self._extracting = None
@@ -143,17 +142,18 @@ class Session:
         n = int(turn.id)
         remembering = None
         if self.memory_enabled:
-            note = (f"Claimant on policy {self.policy} said (turn {n}): {said}", [self.scope])
+            d = self.domain
+            note = (f"The {d.speaker} on {d.entity} {self.key} said (turn {n}): {said}", [self.scope])
             if self.memory.backend.startswith("SurrealDB Agent Memory"):  # hosted: written alongside the turn
                 remembering = self._pool.submit(self.memory.remember, *note)
             else:  # the embedded store is used from one thread only
                 self.tools.memory_ms += self.memory.remember(*note)["ms"]
         self._extracting = self._pool.submit(self.extractor.extract, said, last_answer)
-        out = self.adjuster.run(said, history)
+        out = self.agent.run(said, history)
         self.wait_for_claims()
         if remembering is not None:
             remembering.result()
-        if self._pending:  # the adjuster never called check_claims: file against nothing recalled
+        if self._pending:  # the agent never called check_claims: file against nothing recalled
             self.file_claims(self.tools.inspected and next(iter(self.tools.inspected)) or None)
         self.ledger.set_answer(turn, out["answer"])
         self.history.append({"question": said, "answer": out["answer"]})

@@ -1,4 +1,4 @@
-"""The claim ledger: what the claimant said, checked against what memory returned. Embedded SurrealDB."""
+"""The claim ledger: what the speaker said, checked against what memory returned. Embedded SurrealDB."""
 from __future__ import annotations
 
 import os
@@ -10,7 +10,6 @@ from datetime import datetime, timezone
 
 from surrealdb import RecordID, Surreal
 
-from .fields import ALIASES, FIELDS
 
 
 def rid(table: str, key: Any) -> RecordID:
@@ -35,7 +34,8 @@ RESET_TABLES = ["contradicts", "supersedes", "claim", "trace", "turn", "record",
 
 
 class Ledger:
-    def __init__(self, url: str | None = None, fresh: bool = True):
+    def __init__(self, domain, url: str | None = None, fresh: bool = True):
+        self.domain = domain
         self.url = url or os.environ.get("DBRIEF_DB_URL", "surrealkv+versioned://.dbrief-db")
         if fresh and self.url.startswith("surrealkv"):
             path = self.url.split("://", 1)[1].split("?", 1)[0]
@@ -54,9 +54,12 @@ class Ledger:
                 self.db.query("".join(f"DELETE {t};" for t in RESET_TABLES))
             self.db.query("DELETE field_rule; DELETE alias;")
             self.db.query("INSERT INTO field_rule $rows;", {"rows": [
-                {"field": f, "kind": r["kind"], "tol": r["tol"], "label": r["label"]} for f, r in FIELDS.items()]})
-            self.db.query("INSERT INTO alias $rows;", {"rows": [
-                {"word": w, "canonical": c} for w, c in ALIASES.items()]})
+                {"field": f, "type": r["type"], "label": r["label"],
+                 **{k: r[k] for k in ("window_hours", "pct", "abs") if r.get(k) is not None}}
+                for f, r in domain.fields.items()]})
+            if domain.aliases:
+                self.db.query("INSERT INTO alias $rows;", {"rows": [
+                    {"word": w, "canonical": c} for w, c in domain.aliases.items()]})
 
     def q(self, sql: str, params: dict | None = None, show: bool = False):
         if show:
@@ -161,7 +164,7 @@ class Ledger:
             FROM claim WHERE turn.n = $n ORDER BY field;""", {"n": turn_n}, show=True) or []
 
     def story_at(self, when: Any) -> list[dict]:
-        """System time: the claimant's live story exactly as the ledger held it at `when`."""
+        """System time: the speaker's live story exactly as the ledger held it at `when`."""
         rows = self.q("""SELECT id, field, value, status, turn.n AS turn FROM claim
                          WHERE retracted = false ORDER BY field VERSION <datetime> $t;""",
                       {"t": when}, show=True) or []
