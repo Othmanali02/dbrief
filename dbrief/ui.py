@@ -77,6 +77,9 @@ def memory_line(res: dict) -> Text:
     """What memory did for this answer: the receipt in one line."""
     recalls = res.get("recalls") or []
     t = Text("  memory · ", style="bold grey62")
+    if res.get("memory_enabled") is False:
+        t.append("tools OFF (--no-memory): nothing recalled, nothing cited, nothing verifiable", style="yellow")
+        return t
     if not recalls:
         t.append(f"{res.get('backend')} · no recall: this answer cites nothing", style="grey50")
         return t
@@ -269,9 +272,13 @@ def render_why(ledger, memory, f: dict, idx: int) -> None:
             try:
                 t = memory.trace(tid)
                 body.append(f"  {tid} · “{t.get('query')}” · {len(t['returned'])} returned\n", style="cyan")
-                for x in t["returned"]:
-                    if f["field"] in str(x.get("ref")) or f["field"] in str(x.get("label")):
-                        body.append(f"  → {x.get('ref')}  {x.get('label')}\n", style="bold cyan")
+                hit = [x for x in t["returned"] if f["field"] in str(x.get("ref")) or f["field"] in str(x.get("label"))]
+                for x in hit:
+                    body.append(f"  → {x.get('ref')}  {x.get('label')}\n", style="bold cyan")
+                ent = [x for x in t["returned"] if (f.get("ref") or "").split(":")[-1] in str(x.get("ref"))]
+                if not hit:
+                    body.append(f"  this recall surfaced {f.get('ref')} ({len(ent)} of its attributes); the "
+                                f"{f['field']} value was then read by inspect({f.get('ref')})\n", style="grey62")
             except Exception as e:  # noqa: BLE001
                 body.append(f"  {tid} (could not fetch: {e})\n", style="yellow")
         rec = ledger.record(f.get("ref") or "")
@@ -331,11 +338,10 @@ def render_rewind(ledger, n: int) -> None:
     console.print(tab)
 
 
-def render_memory(memory, policy: str) -> None:
-    from .memory import claimant_scope
-    r = memory.recall(f"what the claimant on policy {policy} said", scopes=[claimant_scope(policy)], k=10)
+def render_memory(memory, policy: str, scope: str) -> None:
+    r = memory.recall(f"what the claimant on policy {policy} said", scopes=[scope], k=10)
     tab = Table(box=box.SIMPLE_HEAD, padding=(0, 1), title=f"[bold]EXPERIENTIAL MEMORY[/]  [grey50]scope "
-                f"{claimant_scope(policy)} · trace {r.get('trace_id')} · {r['ms']:.0f} ms[/]", title_justify="left")
+                f"{scope} · trace {r.get('trace_id')} · {r['ms']:.0f} ms[/]", title_justify="left")
     tab.add_column("id")
     tab.add_column("what memory returned")
     for h in r["hits"]:

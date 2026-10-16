@@ -43,7 +43,7 @@ class Tools:
             return f"error: {e}"
 
     def t_recall(self, query: str, scope: str = "records") -> str:
-        scopes = [claimant_scope(self.s.policy)] if scope == "conversation" else [SCOPE]
+        scopes = [self.s.scope] if scope == "conversation" else [SCOPE]
         r = self.s.memory.recall(query, scopes=scopes, k=8)
         self.memory_ms += r["ms"]
         self.recalls.append({**r, "query": query, "scope": scope})
@@ -86,7 +86,7 @@ class Tools:
                          for c in self.checked)
 
     def t_remember(self, text: str) -> str:
-        r = self.s.memory.remember(text, [claimant_scope(self.s.policy)])
+        r = self.s.memory.remember(text, [self.s.scope])
         self.memory_ms += r["ms"]
         return "noted"
 
@@ -104,9 +104,13 @@ class Session:
         self.adjuster = adjuster_factory(self.tools)
         self._pending: list[dict] = []
         self._extracting = None
-        self._pool = ThreadPoolExecutor(max_workers=1)
+        self._pool = ThreadPoolExecutor(max_workers=2)
         self._turn = None
         self.history: list[dict] = []
+
+    @property
+    def scope(self) -> str:
+        return claimant_scope(self.policy, self.ledger.session_id())
 
     @property
     def subject(self) -> str:
@@ -137,13 +141,18 @@ class Session:
         last_answer = history[-1]["answer"] if history else ""
         self._turn = turn = self.ledger.add_turn(said)
         n = int(turn.id)
+        remembering = None
         if self.memory_enabled:
-            r = self.memory.remember(f"Claimant on policy {self.policy} said (turn {n}): {said}",
-                                     [claimant_scope(self.policy)])
-            self.tools.memory_ms += r["ms"]
+            note = (f"Claimant on policy {self.policy} said (turn {n}): {said}", [self.scope])
+            if self.memory.backend.startswith("SurrealDB Agent Memory"):  # hosted: written alongside the turn
+                remembering = self._pool.submit(self.memory.remember, *note)
+            else:  # the embedded store is used from one thread only
+                self.tools.memory_ms += self.memory.remember(*note)["ms"]
         self._extracting = self._pool.submit(self.extractor.extract, said, last_answer)
         out = self.adjuster.run(said, history)
         self.wait_for_claims()
+        if remembering is not None:
+            remembering.result()
         if self._pending:  # the adjuster never called check_claims: file against nothing recalled
             self.file_claims(self.tools.inspected and next(iter(self.tools.inspected)) or None)
         self.ledger.set_answer(turn, out["answer"])
@@ -156,5 +165,5 @@ class Session:
         return {"n": n, "said": said, "answer": out["answer"], "cited": out["cited"], "trace": tr,
                 "recalls": self.tools.recalls, "inspected": list(self.tools.inspected),
                 "claims": claims, "flags": flags, "superseded": sup, "review": self.ledger.review(),
-                "memory_ms": self.tools.memory_ms, "backend": self.memory.backend,
+                "memory_ms": self.tools.memory_ms, "backend": self.memory.backend, "memory_enabled": self.memory_enabled,
                 "db": {"claims": len(claims), "edges": len(flags) + len(sup), "ms": self._db_ms}}

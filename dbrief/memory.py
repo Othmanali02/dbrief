@@ -29,8 +29,9 @@ SCOPE = "dbrief"
 DEMO_POLICY = "521585"
 
 
-def claimant_scope(policy: str) -> str:
-    return f"{SCOPE}/claimant/{policy}"
+def claimant_scope(policy: str, session: str | None = None) -> str:
+    """Experiential memory for one claimant conversation: dbrief/claimant/<policy>/<session>."""
+    return f"{SCOPE}/claimant/{policy}" + (f"/{session}" if session else "")
 
 
 def env(name: str, default: str | None = None) -> str | None:

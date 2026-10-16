@@ -31,7 +31,7 @@ def hhmm(v: Any) -> str:
     return s[11:16] if len(s) >= 16 else s
 
 SCHEMA = (Path(__file__).parent / "ledger.surql").read_text()
-RESET_TABLES = ["contradicts", "supersedes", "claim", "trace", "turn", "record"]
+RESET_TABLES = ["contradicts", "supersedes", "claim", "trace", "turn", "record", "meta"]
 
 
 class Ledger:
@@ -62,6 +62,18 @@ class Ledger:
         if show:
             self.queries.append(sql.strip())
         return self.db.query(sql, params or {})
+
+    def session_id(self) -> str:
+        """One id per conversation, kept in the ledger so --resume continues the same memory scope."""
+        if not getattr(self, "_sid", None):
+            rows = self.q("SELECT VALUE sid FROM meta WHERE name = 'session';")
+            if rows:
+                self._sid = rows[0]
+            else:
+                import uuid
+                self._sid = "s" + uuid.uuid4().hex[:8]
+                self.q("CREATE meta SET name = 'session', sid = $sid;", {"sid": self._sid})
+        return self._sid
 
     # ---------------------------------------------------------------- records
     def snapshot(self, inspected: dict, trace_id: str | None, source: str) -> None:

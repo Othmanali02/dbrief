@@ -45,6 +45,9 @@ DEFINE FIELD OVERWRITE trace_id ON record TYPE option<string>;      -- the recal
 DEFINE FIELD OVERWRITE at       ON record TYPE datetime DEFAULT time::now();
 DEFINE INDEX OVERWRITE record_ref ON record FIELDS ref UNIQUE;
 
+-- ------------------------------------------------------------------- meta ---
+DEFINE TABLE OVERWRITE meta SCHEMALESS;   -- the conversation's session id (scopes its experiential memory)
+
 -- ------------------------------------------------------------------ turns ---
 DEFINE TABLE OVERWRITE turn SCHEMAFULL;
 DEFINE FIELD OVERWRITE n        ON turn TYPE int;

@@ -18,8 +18,6 @@ def build(live: bool, memory_enabled: bool = True, resume: bool = False, db_url:
           policy: str = DEMO_POLICY) -> Session:
     memory, note = open_memory(offline=not live)
     ledger = Ledger(db_url, fresh=not resume)
-    if not resume and hasattr(memory, "db"):  # local memory: start the conversation scope clean
-        memory.db.query("DELETE mem_note;")
     if live:
         from .adjuster import Adjuster, Extractor
         factory = lambda tools: Adjuster(tools, memory_enabled=memory_enabled)  # noqa: E731
@@ -107,7 +105,7 @@ def handle_command(s: Session, line: str) -> bool:
     elif cmd == "/rewind":
         ui.render_rewind(L, int(arg)) if arg.isdigit() else ui.console.print("  /rewind TURN")
     elif cmd == "/memory":
-        ui.render_memory(s.memory, s.policy)
+        ui.render_memory(s.memory, s.policy, s.scope)
     elif cmd == "/sql":
         ui.render_sql(L)
     elif cmd == "/review":
