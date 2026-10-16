@@ -68,6 +68,17 @@ class AgentMemory:
         return cls(url, ctx, key) if url and ctx and key else None
 
     def _call(self, method: str, path: str, body: Any = None) -> tuple[Any, float]:
+        """One request; a 503 ("retry shortly") is retried twice, a second apart."""
+        for attempt in range(3):
+            try:
+                return self._call_once(method, path, body)
+            except MemoryError_ as e:
+                if "HTTP 503" not in str(e) or attempt == 2:
+                    raise
+                time.sleep(1.0 + attempt)
+        raise AssertionError("unreachable")
+
+    def _call_once(self, method: str, path: str, body: Any = None) -> tuple[Any, float]:
         req = urllib.request.Request(
             self.base + path, method=method,
             data=json.dumps(body).encode() if body is not None else None,
