@@ -181,7 +181,8 @@ class Extractor:
                            "confidence": {"type": "number", "description": "0-1: how clearly the words state this value"}}}}})
         system = f"""You extract factual claims from what an insurance claimant says. Fields:
 {field_lines}
-- other: any other factual claim about the incident (weather, speed, ...): set topic.
+- other: a concrete fact about the incident that no field above covers (weather, road conditions, speed,
+  the other driver): set topic. Not the policy number, not a restatement of a field above, not feelings or plans.
 
 Normalise values: hours as 0-23 ("around six in the morning" = 6, "half past five in the evening" = 17),
 dates as YYYY-MM-DD only when the year is clear, amounts as plain numbers ("about seventy thousand dollars" = 70000),
@@ -198,7 +199,10 @@ quote must be copied exactly from the claimant's words; never file facts that on
             if c.get("field") not in names or not str(c.get("value", "")).strip():
                 continue
             if c["field"] == "other":
-                c["field"] = "other:" + (c.get("topic") or "note")
+                topic = (c.get("topic") or "note").lower()
+                if "policy" in topic:
+                    continue  # the policy number identifies the record; it is not a claim about it
+                c["field"] = "other:" + topic
             if not c.get("quote") or c["quote"].strip().lower() not in said.lower():
                 continue  # only what the claimant actually said, never facts echoed from the adjuster
             out.append(c)

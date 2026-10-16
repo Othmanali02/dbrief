@@ -209,6 +209,10 @@ DEFINE EVENT OVERWRITE check_claim ON claim WHEN $event = "CREATE" THEN {
 -- The only way a claim enters the ledger. A revising claim retracts the live
 -- claims for the same field (never deletes them) and links them with `supersedes`.
 DEFINE FUNCTION OVERWRITE fn::report($turn: record<turn>, $c: object) {
+    -- Saying the same thing again is not a new claim (and not a correction).
+    LET $same = (SELECT VALUE id FROM claim WHERE subject = $c.subject AND field = $c.field
+                 AND retracted = false AND fn::norm(value) = fn::norm($c.value));
+    IF array::len($same) > 0 { RETURN $same[0]; };
     LET $replaced = IF $c.revises THEN (
         SELECT VALUE id FROM claim WHERE subject = $c.subject AND field = $c.field AND retracted = false
     ) ELSE [] END;

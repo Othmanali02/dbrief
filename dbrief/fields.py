@@ -54,6 +54,9 @@ VOCAB: dict[str, list[str]] = {
 ALIASES: dict[str, str] = {
     "yes": "YES", "y": "YES", "true": "YES", "yep": "YES",
     "no": "NO", "n": "NO", "false": "NO", "none filed": "NO",
+    # the dataset's states, spoken in full
+    "south carolina": "SC", "north carolina": "NC", "new york": "NY", "ohio": "OH", "pennsylvania": "PA",
+    "virginia": "VA", "west virginia": "WV", "illinois": "IL", "indiana": "IN",
 }
 
 ENTITY_TYPE = "policy"
