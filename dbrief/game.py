@@ -170,7 +170,7 @@ def load(domain_name: str | None, csv_path: str | None, key: str | None, name: s
         ui.console.print(f"  domain file: {draft}" + ("" if draft.stat().st_mtime > time.time() - 5 else " (exists, kept)"))
         for f, spec in fields.items():
             vals = f"  [{', '.join(spec['values'][:6])}{'…' if len(spec.get('values', [])) > 6 else ''}]" if spec.get("values") else ""
-            ui.console.print(f"    {f:32} {spec['type']}{vals}", highlight=False)
+            ui.console.print(Text(f"    {f:32} {spec['type']}{vals}"))
         domain = Domain.load(name)
     else:
         domain = Domain.load(domain_name)

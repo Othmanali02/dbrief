@@ -54,8 +54,9 @@ def banner(mode: str, backend: str, note: str | None, key: str) -> None:
     title.append("   what you said vs what the records say", style="italic grey62")
     console.print(Panel(title, box=box.HEAVY, border_style="grey35", padding=(0, 2)))
     meta = Text()
-    rows = d.loaded().get("rows")
-    meta.append(f"DOMAIN  {d.display}" + (f" · {rows} rows loaded" if rows else ""), style="bold")
+    st = d.loaded()
+    meta.append(f"DOMAIN  {d.display}" + (f" · {st['rows']} rows loaded into {st['backend']}" if st.get("rows") else
+                                          " · not loaded yet (dbrief load)"), style="bold")
     meta.append(f"   ·   {d.entity} {key}", style="bold")
     meta.append(f"   ·   memory: {backend}", style="bold cyan")
     meta.append(f"   ·   {mode}", style="grey62")

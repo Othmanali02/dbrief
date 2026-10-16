@@ -133,6 +133,8 @@ def guess_type(name: str, values: list[str]) -> dict:
     low = name.lower()
     if not vals:
         return {"type": "text"}
+    if any(w in low for w in ("zip", "postcode", "postal")):
+        return {"type": "place"}
     if all(_NUM.match(v) for v in vals):
         if "hour" in low and all(0 <= float(v) <= 23 for v in vals):
             return {"type": "hour"}
