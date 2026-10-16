@@ -40,8 +40,8 @@ DEFINE INDEX OVERWRITE alias_word ON alias FIELDS word UNIQUE;
 -- trace of the recall that surfaced it. Nothing the speaker says edits it.
 DEFINE TABLE OVERWRITE record SCHEMAFULL;
 DEFINE FIELD OVERWRITE ref      ON record TYPE string;              -- '<entity>:<key>'
-DEFINE FIELD OVERWRITE fields   ON record FLEXIBLE TYPE object;     -- field -> value
-DEFINE FIELD OVERWRITE attr_ids ON record FLEXIBLE TYPE object;     -- field -> Agent Memory attribute id
+-- record.fields (field -> value) and record.attr_ids (field -> Agent Memory attribute id) are
+-- flexible objects; ledger.py defines them, because 2.x and 3.x spell FLEXIBLE differently.
 DEFINE FIELD OVERWRITE source   ON record TYPE string;              -- which memory backend
 DEFINE FIELD OVERWRITE trace_id ON record TYPE option<string>;      -- the recall that surfaced it
 DEFINE FIELD OVERWRITE at       ON record TYPE datetime DEFAULT time::now();
@@ -119,7 +119,7 @@ DEFINE FUNCTION OVERWRITE fn::norm($v: any) -> string {
 DEFINE FUNCTION OVERWRITE fn::isnum($s: string) -> bool {
     LET $parts = string::split($s, '.');
     RETURN array::len($parts) <= 2 AND array::len($parts[WHERE $this = '']) = 0
-        AND string::is::numeric(array::join($parts, ''));
+        AND string::matches(array::join($parts, ''), '^-?[0-9]+$');
 };
 
 -- "2015-01-25", "2015-01-25 05:00", "2015-01-25T05:00:00" -> datetime (or NONE).
@@ -129,7 +129,7 @@ DEFINE FUNCTION OVERWRITE fn::todt($s: string) -> any {
         ELSE IF string::len($u) = 16 THEN string::concat($u, ':00Z')
         ELSE IF string::len($u) = 19 THEN string::concat($u, 'Z')
         ELSE $u END;
-    RETURN IF string::is::datetime($c) THEN <datetime> $c ELSE NONE END;
+    RETURN IF string::matches($c, '^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$') THEN <datetime> $c ELSE NONE END;
 };
 
 -- Is a claimed value close to the record value? The rule comes from the field's type;

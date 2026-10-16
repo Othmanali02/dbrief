@@ -190,10 +190,12 @@ class LocalMemory:
         self.db.use("dbrief", "memory")
         self.db.query(LOCAL_SCHEMA)
         for name, table, field in (("mem_attr_ft", "mem_attr", "text"), ("mem_note_ft", "mem_note", "text")):
+            if name in str(self.db.query(f"INFO FOR TABLE {table};")):
+                continue  # already built: rebuilding it on every start took ~25 s
             try:
-                self.db.query(f"DEFINE INDEX OVERWRITE {name} ON {table} FIELDS {field} FULLTEXT ANALYZER mem_text BM25;")
+                self.db.query(f"DEFINE INDEX IF NOT EXISTS {name} ON {table} FIELDS {field} FULLTEXT ANALYZER mem_text BM25;")
             except Exception:  # noqa: BLE001 - SurrealDB 2.x syntax
-                self.db.query(f"DEFINE INDEX OVERWRITE {name} ON {table} FIELDS {field} SEARCH ANALYZER mem_text BM25;")
+                self.db.query(f"DEFINE INDEX IF NOT EXISTS {name} ON {table} FIELDS {field} SEARCH ANALYZER mem_text BM25;")
         if not self.db.query("SELECT VALUE id FROM mem_attr WHERE scope = $s LIMIT 1;", {"s": domain.scope + "/"}):
             self.load(domain, domain.rows(), log=lambda *_: None)
 

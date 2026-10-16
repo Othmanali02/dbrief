@@ -50,6 +50,11 @@ class Ledger:
         self.queries: list[str] = []   # what we ran, for the /sql panel
         if fresh:
             self.db.query(SCHEMA)
+            for f in ("fields", "attr_ids"):
+                try:  # SurrealDB 3.x
+                    self.db.query(f"DEFINE FIELD OVERWRITE {f} ON record TYPE object FLEXIBLE;")
+                except Exception:  # noqa: BLE001 - 2.x
+                    self.db.query(f"DEFINE FIELD OVERWRITE {f} ON record FLEXIBLE TYPE object;")
             if self.remote:  # keep the database so live queries in Studio survive a new session
                 self.db.query("".join(f"DELETE {t};" for t in RESET_TABLES))
             self.db.query("DELETE field_rule; DELETE alias;")
