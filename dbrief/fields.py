@@ -1,6 +1,6 @@
 """The claim fields DBrief checks: which dataset columns a claimant could state, and how each is compared.
 
-Kinds (the rules themselves live in schema.surql, fn::verdict):
+Kinds (the rules themselves live in ledger.surql, fn::verdict and fn::near):
   enum    exact match after normalisation                        else conflict
   yesno   YES/NO after aliases                                   else conflict
   hour    |a - b| <= tol on a 24h clock                          near-miss

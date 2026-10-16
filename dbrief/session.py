@@ -106,6 +106,7 @@ class Session:
         self._extracting = None
         self._pool = ThreadPoolExecutor(max_workers=1)
         self._turn = None
+        self.history: list[dict] = []
 
     @property
     def subject(self) -> str:
@@ -131,7 +132,8 @@ class Session:
     def ask(self, said: str) -> dict:
         self.tools.reset()
         self._db_ms = 0.0
-        history = self.ledger.recent_turns(2)
+        # Only this process's turns: after --resume, earlier turns are reachable only through memory.
+        history = self.history[-2:]
         last_answer = history[-1]["answer"] if history else ""
         self._turn = turn = self.ledger.add_turn(said)
         n = int(turn.id)
@@ -145,6 +147,7 @@ class Session:
         if self._pending:  # the adjuster never called check_claims: file against nothing recalled
             self.file_claims(self.tools.inspected and next(iter(self.tools.inspected)) or None)
         self.ledger.set_answer(turn, out["answer"])
+        self.history.append({"question": said, "answer": out["answer"]})
         tr = self.ledger.add_trace(turn, self.tools.trace_ids, self.tools.retrieved, out["cited"],
                                    self.memory.backend, self.tools.memory_ms)
         claims = self.ledger.claims_for_turn(n)

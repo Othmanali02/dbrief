@@ -6,10 +6,29 @@ import shutil
 from pathlib import Path
 from typing import Any
 
+from datetime import datetime, timezone
+
 from surrealdb import RecordID, Surreal
 
-from .db import as_str, rid
 from .fields import ALIASES, FIELDS
+
+
+def rid(table: str, key: Any) -> RecordID:
+    return RecordID(table, key)
+
+
+def as_str(v: Any) -> str:
+    """Render a RecordID or anything else as 'table:key'."""
+    if isinstance(v, RecordID):
+        return f"{v.table_name}:{v.id}"
+    return str(v)
+
+
+def hhmm(v: Any) -> str:
+    if isinstance(v, datetime):
+        return v.astimezone(timezone.utc).strftime("%H:%M")
+    s = str(v)
+    return s[11:16] if len(s) >= 16 else s
 
 SCHEMA = (Path(__file__).parent / "ledger.surql").read_text()
 RESET_TABLES = ["contradicts", "supersedes", "claim", "trace", "turn", "record"]

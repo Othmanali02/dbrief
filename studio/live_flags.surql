@@ -1,3 +1,3 @@
--- Every flag raise_flags writes, the moment its transaction commits.
--- Start it once a debrief is running (the table must exist). It keeps working across new debriefs.
-LIVE SELECT * FROM discrepancy;
+-- Every near-miss and conflict check_claim writes, the moment its transaction commits.
+-- Namespace dbrief, database ledger. Start it once a session is running (the table must exist).
+LIVE SELECT * FROM contradicts;
