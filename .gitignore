@@ -8,3 +8,4 @@ history.txt
 *.svg
 *.html
 .venv/
+.env
